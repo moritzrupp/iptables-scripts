@@ -1,11 +1,29 @@
 #!/bin/bash
-
-# ip6tables
-# by Ray-works.de
-# Update: 21.10.2013
+# MIT License
+#
+# Copyright (c) 2013 Ray-works.de
+# Copyright (c) 2016 Moritz Rupp
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
 
 #########################
-# Configuration
+# Variables
 #########################
 
 INTERFACE=eth0
@@ -20,13 +38,13 @@ OUTTCPPORTS=""
 OUTUDPPORTS=""
 
 # SSH Port for extra protection via limits
-SSHPORT=""
+SSHPORT="22"
 
 #########################
 # Turn iptables (for IPv6) on
 #########################
 function on {
-       	
+
 # Flush & default
 $IPTABLES -F
 
@@ -111,7 +129,7 @@ $IPTABLES -A OUTPUT -m state --state INVALID -j LOGNDROP
 $IPTABLES -A INPUT -p tcp ! --syn -m state --state NEW -j PORTSCAN
 
 # syn flood limitation
-$IPTABLES -A INPUT -p tcp --syn -m limit --limit 5/s --limit-burst 10 -j LOG --log-prefix "SYN flood: " 
+$IPTABLES -A INPUT -p tcp --syn -m limit --limit 5/s --limit-burst 10 -j LOG --log-prefix "SYN flood: "
 $IPTABLES -A INPUT -p tcp --syn -j DROP
 
 # Portscan: Drop ALL

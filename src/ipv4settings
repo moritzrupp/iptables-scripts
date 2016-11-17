@@ -1,8 +1,26 @@
 #!/bin/bash
-
-# iptables Script
-# by Ray-works.de
-# Update: 29.10.2013
+# MIT License
+#
+# Copyright (c) 2013 Ray-works.de
+# Copyright (c) 2016 Moritz Rupp
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
 
 #########################
 # Variables
@@ -12,11 +30,13 @@ IPTABLES=`which iptables`
 
 # Interfaces
 ETH=eth0
-VPN=tun0
+#VPN=tun0
+DOCKER=docker0
 
 # IP Adresses
 IP=`ifconfig $ETH | grep inet | cut -d : -f 2 | cut -d \  -f 1`
 VPNIP=`ifconfig $VPN | grep inet | cut -d : -f 2 | cut -d \  -f 1`
+DOCKERIP=`ifconfig $DOCKER | grep inet | cut -d : -f 2 | cut -d \  -f 1`
 
 #########################
 # Configuration
@@ -37,6 +57,12 @@ VPNSUB=""
 # Do you have/use fail2ban?
 FAIL2BAN="no"
 
+# Do you have/use docker?
+DOCKERUSE="no"
+
+# Docker subnet; default: 172.17.0.0/16
+DOCKERSUB="172.17.0.0/16"
+
 # TCP & UDP Ports for incoming traffic
 INTCPPORTS=""
 INUDPPORTS=""
@@ -46,14 +72,14 @@ OUTTCPPORTS=""
 OUTUDPPORTS=""
 
 # SSH Port for extra protection via limits
-SSHPORT=""
+SSHPORT="22"
 
 # Activate syn cookies (ddos protection).
 # Default: 0
 echo 1 > /proc/sys/net/ipv4/tcp_syncookies
 
 # Prevents to be a part of an DDOS attack (smurf).
-echo 1 > /proc/sys/net/ipv4/icmp_echo_ignore_broadcasts 
+echo 1 > /proc/sys/net/ipv4/icmp_echo_ignore_broadcasts
 
 # Required
 echo 1 > /proc/sys/net/ipv4/ip_forward
@@ -62,7 +88,7 @@ echo 1 > /proc/sys/net/ipv4/ip_forward
 # Turn iptables (for IPv4) on
 #########################
 function on {
-       	
+
 # Flush & default
 $IPTABLES -F
 
@@ -88,6 +114,11 @@ $IPTABLES -I INPUT 1 -p 4 -j ACCEPT
 $IPTABLES -A INPUT -i lo -j ACCEPT
 $IPTABLES -A OUTPUT -o lo -j ACCEPT
 
+# Docker access from loopback to bridge
+if [ "$DOCKERUSE" = "yes" ]; then
+  $IPTABLES -A OUTPUT -i lo -o $DOCKER -s $DOCKERIP -d $DOCKERSUB -j ACCEPT
+fi
+
 # Storage Access
 if [ "$NFSSTORAGE" = "yes" ]; then
 	$IPTABLES -A INPUT -i $ETH -p tcp -s $NFSIP -j ACCEPT
@@ -98,7 +129,7 @@ if [ "$NFSSTORAGE" = "yes" ]; then
 fi
 
 # VPN Traffic Forwarding
-if [ "$VPNFORWARD" = "yes" ]; then 
+if [ "$VPNFORWARD" = "yes" ]; then
 	$IPTABLES -A FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT
 	$IPTABLES -A FORWARD -s $VPNSUB -j ACCEPT
 	$IPTABLES -A FORWARD -j REJECT
@@ -144,8 +175,8 @@ for PORT in $OUTUDPPORTS; do
 done;
 
 # FTPS explicit passive portrange
-$IPTABLES -A INPUT -p tcp --dport 40000:40100 -j ACCEPT
-$IPTABLES -A INPUT -p udp --dport 40000:40100 -j ACCEPT
+#$IPTABLES -A INPUT -p tcp --dport 49152:49252 -j ACCEPT
+#$IPTABLES -A INPUT -p udp --dport 49152:49252 -j ACCEPT
 
 # Deny more than 3 connection attempts per 10 minutes (SSH)
 $IPTABLES -A INPUT -p tcp --dport $SSHPORT -m state --state NEW -m recent --set --name SSH
@@ -170,7 +201,7 @@ $IPTABLES -A OUTPUT -m state --state INVALID -j LOGNDROP
 $IPTABLES -A INPUT -p tcp ! --syn -m state --state NEW -j PORTSCAN
 
 # syn flood limitation
-$IPTABLES -A INPUT -p tcp --syn -m limit --limit 5/s --limit-burst 10 -j LOG --log-prefix "SYN flood: " 
+$IPTABLES -A INPUT -p tcp --syn -m limit --limit 5/s --limit-burst 10 -j LOG --log-prefix "SYN flood: "
 $IPTABLES -A INPUT -p tcp --syn -j DROP
 
 # Portscan: Drop ALL
@@ -201,8 +232,13 @@ $IPTABLES -A INPUT -p tcp --tcp-flags ACK,URG URG -j PORTSCAN
 echo "Firewall ($IPTABLES): enabled."
 
 # Fail2Ban
-if [ "$FAIL2BAN" = "yes" ]; then 
+if [ "$FAIL2BAN" = "yes" ]; then
 	/etc/init.d/fail2ban start
+fi
+
+# Docker
+if [ "$DOCKERUSE" = "yes" ]; then
+  /etc/init.d/docker start
 fi
 
 }
@@ -215,7 +251,7 @@ fi
 function off {
 
 $IPTABLES -F
-$IPTABLES -t nat -F PREROUTING 
+$IPTABLES -t nat -F PREROUTING
 $IPTABLES -t nat -F POSTROUTING
 $IPTABLES -X
 $IPTABLES -P INPUT ACCEPT
