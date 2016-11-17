@@ -1,0 +1,251 @@
+#!/bin/bash
+
+# iptables Script
+# by Ray-works.de
+# Update: 29.10.2013
+
+#########################
+# Variables
+#########################
+
+IPTABLES=`which iptables`
+
+# Interfaces
+ETH=eth0
+VPN=tun0
+
+# IP Adresses
+IP=`ifconfig $ETH | grep inet | cut -d : -f 2 | cut -d \  -f 1`
+VPNIP=`ifconfig $VPN | grep inet | cut -d : -f 2 | cut -d \  -f 1`
+
+#########################
+# Configuration
+#########################
+
+# Allow access to the NFS storage?
+NFSSTORAGE="no"
+
+# NFS Storage
+NFSIP=""
+
+# Do you wanna use VPN Traffic Forwarding?
+VPNFORWARD="no"
+
+# VPN Subnetz
+VPNSUB=""
+
+# Do you have/use fail2ban?
+FAIL2BAN="no"
+
+# TCP & UDP Ports for incoming traffic
+INTCPPORTS=""
+INUDPPORTS=""
+
+# TCP & UDP Ports for outgoing traffic
+OUTTCPPORTS=""
+OUTUDPPORTS=""
+
+# SSH Port for extra protection via limits
+SSHPORT=""
+
+# Activate syn cookies (ddos protection).
+# Default: 0
+echo 1 > /proc/sys/net/ipv4/tcp_syncookies
+
+# Prevents to be a part of an DDOS attack (smurf).
+echo 1 > /proc/sys/net/ipv4/icmp_echo_ignore_broadcasts 
+
+# Required
+echo 1 > /proc/sys/net/ipv4/ip_forward
+
+#########################
+# Turn iptables (for IPv4) on
+#########################
+function on {
+       	
+# Flush & default
+$IPTABLES -F
+
+# Block Everything
+$IPTABLES -P INPUT DROP
+$IPTABLES -P OUTPUT DROP
+$IPTABLES -P FORWARD DROP
+
+# New Chain for logging
+$IPTABLES -N LOGNDROP
+$IPTABLES -A LOGNDROP -j LOG -m limit --limit 1/min --log-prefix "[Dropped IPv4]: " --log-level 7
+$IPTABLES -A LOGNDROP -j DROP
+
+# New Chain for portscan logging
+$IPTABLES -N PORTSCAN
+$IPTABLES -A PORTSCAN -j LOG -m limit --limit 1/min --log-prefix "[Portscan IPv4]: " --log-level 7
+$IPTABLES -A PORTSCAN -j DROP
+
+# Allow Protocol 4
+$IPTABLES -I INPUT 1 -p 4 -j ACCEPT
+
+# Allow internal addresses
+$IPTABLES -A INPUT -i lo -j ACCEPT
+$IPTABLES -A OUTPUT -o lo -j ACCEPT
+
+# Storage Access
+if [ "$NFSSTORAGE" = "yes" ]; then
+	$IPTABLES -A INPUT -i $ETH -p tcp -s $NFSIP -j ACCEPT
+	$IPTABLES -A INPUT -i $ETH -p udp -s $NFSIP -j ACCEPT
+
+	$IPTABLES -A OUTPUT -o $ETH -p tcp -d $NFSIP -j ACCEPT
+	$IPTABLES -A OUTPUT -o $ETH -p udp -d $NFSIP -j ACCEPT
+fi
+
+# VPN Traffic Forwarding
+if [ "$VPNFORWARD" = "yes" ]; then 
+	$IPTABLES -A FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT
+	$IPTABLES -A FORWARD -s $VPNSUB -j ACCEPT
+	$IPTABLES -A FORWARD -j REJECT
+	$IPTABLES -t nat -A POSTROUTING -s $VPNSUB -o $ETH -j MASQUERADE
+fi
+
+# Allow established and related connection
+$IPTABLES -A INPUT -p tcp -m state --state ESTABLISHED,RELATED -j ACCEPT
+$IPTABLES -A OUTPUT -p tcp -m state --state ESTABLISHED,RELATED -j ACCEPT
+
+$IPTABLES -A INPUT -p udp -m state --state ESTABLISHED,RELATED -j ACCEPT
+$IPTABLES -A OUTPUT -p udp -m state --state ESTABLISHED,RELATED -j ACCEPT
+
+# Allow ICMP
+$IPTABLES -A INPUT -p icmp -j ACCEPT
+$IPTABLES -A OUTPUT -p icmp -j ACCEPT
+
+# Allow DNS Lookup
+$IPTABLES -A OUTPUT -p udp --dport 53 -j ACCEPT
+
+#
+# TCP & UDP Ports for incoming traffic
+#
+
+for PORT in $INTCPPORTS; do
+	$IPTABLES -A INPUT -p tcp -i $ETH --dport $PORT -m state --state NEW,ESTABLISHED,RELATED -j ACCEPT
+done;
+
+for PORT in $INUDPPORTS; do
+	$IPTABLES -A INPUT -p udp -i $ETH --dport $PORT -m state --state NEW,ESTABLISHED,RELATED -j ACCEPT
+done;
+
+#
+# TCP & UDP Ports for outgoing traffic
+#
+
+for PORT in $OUTTCPPORTS; do
+	$IPTABLES -A OUTPUT -p tcp -o $ETH --dport $PORT -m state --state NEW,ESTABLISHED,RELATED -j ACCEPT
+done;
+
+for PORT in $OUTUDPPORTS; do
+	$IPTABLES -A OUTPUT -p udp -o $ETH --dport $PORT -m state --state NEW,ESTABLISHED,RELATED -j ACCEPT
+done;
+
+# FTPS explicit passive portrange
+$IPTABLES -A INPUT -p tcp --dport 40000:40100 -j ACCEPT
+$IPTABLES -A INPUT -p udp --dport 40000:40100 -j ACCEPT
+
+# Deny more than 3 connection attempts per 10 minutes (SSH)
+$IPTABLES -A INPUT -p tcp --dport $SSHPORT -m state --state NEW -m recent --set --name SSH
+$IPTABLES -A INPUT -p tcp --dport $SSHPORT -m state --state NEW -m recent --update --seconds 600 --hitcount 4 --rttl --name SSH -j LOGNDROP
+
+# Limit connections per minute from single ip to 10 (HTTP)
+$IPTABLES -A INPUT -p tcp --dport 80 -m state --state NEW -m recent --set --name http
+$IPTABLES -A INPUT -p tcp --dport 80 -m state --state NEW -m recent --update --seconds 60 --hitcount 10 --rttl --name http -j LOGNDROP
+
+# Rate limit ICMP (ping) packets
+$IPTABLES -I INPUT -p icmp --icmp-type echo-request -m recent --set
+$IPTABLES -I INPUT -p icmp --icmp-type echo-request -m recent --update --seconds 20 --hitcount 10 -j LOGNDROP
+$IPTABLES -A INPUT -p icmp -m icmp --icmp-type address-mask-request -j LOGNDROP
+$IPTABLES -A INPUT -p icmp -m icmp --icmp-type timestamp-request -j LOGNDROP
+
+# Drop all invalid packets
+$IPTABLES -A INPUT -m state --state INVALID -j LOGNDROP
+$IPTABLES -A FORWARD -m state --state INVALID -j LOGNDROP
+$IPTABLES -A OUTPUT -m state --state INVALID -j LOGNDROP
+
+# Drop new connections without the SYN flag set
+$IPTABLES -A INPUT -p tcp ! --syn -m state --state NEW -j PORTSCAN
+
+# syn flood limitation
+$IPTABLES -A INPUT -p tcp --syn -m limit --limit 5/s --limit-burst 10 -j LOG --log-prefix "SYN flood: " 
+$IPTABLES -A INPUT -p tcp --syn -j DROP
+
+# Portscan: Drop ALL
+$IPTABLES -A INPUT -p tcp --tcp-flags ALL ALL -j PORTSCAN
+
+# Portscan: Drop FIN + URG + PSH
+$IPTABLES -A INPUT -p tcp --tcp-flags ALL FIN,URG,PSH -j PORTSCAN
+
+# Portscan: Drop nmap Null scan
+$IPTABLES -A INPUT -p tcp --tcp-flags ALL NONE -j PORTSCAN
+
+# Portscan: Drop nmap FIN stealth scan
+$IPTABLES -A INPUT -p tcp --tcp-flags ALL FIN -j PORTSCAN
+
+# Portscan: Drop XMAS
+$IPTABLES -A INPUT -p tcp --tcp-flags ALL URG,ACK,PSH,RST,SYN,FIN -j PORTSCAN
+
+# Portscan: Other combinations
+$IPTABLES -A INPUT -p tcp --tcp-flags ALL ACK,RST,SYN,FIN -j PORTSCAN
+$IPTABLES -A INPUT -p tcp --tcp-flags SYN,FIN SYN,FIN -j PORTSCAN
+$IPTABLES -A INPUT -p tcp --tcp-flags SYN,RST SYN,RST -j PORTSCAN
+$IPTABLES -A INPUT -p tcp --tcp-flags ALL SYN,RST,ACK,FIN,URG -j PORTSCAN
+$IPTABLES -A INPUT -p tcp --tcp-flags FIN,RST FIN,RST -j PORTSCAN
+$IPTABLES -A INPUT -p tcp --tcp-flags ACK,FIN FIN -j PORTSCAN
+$IPTABLES -A INPUT -p tcp --tcp-flags ACK,PSH PSH -j PORTSCAN
+$IPTABLES -A INPUT -p tcp --tcp-flags ACK,URG URG -j PORTSCAN
+
+echo "Firewall ($IPTABLES): enabled."
+
+# Fail2Ban
+if [ "$FAIL2BAN" = "yes" ]; then 
+	/etc/init.d/fail2ban start
+fi
+
+}
+
+
+#########################
+# Turn iptables off
+#########################
+
+function off {
+
+$IPTABLES -F
+$IPTABLES -t nat -F PREROUTING 
+$IPTABLES -t nat -F POSTROUTING
+$IPTABLES -X
+$IPTABLES -P INPUT ACCEPT
+$IPTABLES -P OUTPUT ACCEPT
+$IPTABLES -P FORWARD ACCEPT
+
+echo "Firewall ($IPTABLES): disabled. (allowing all access)"
+
+}
+
+#########################
+# Script usage
+#########################
+
+case "$1" in
+    start)
+	on
+    ;;
+    stop)
+	off
+    ;;
+    restart)
+       off
+	sleep 3;
+       on
+    ;;
+    *)
+	echo "$0 {start|stop|restart}"
+	echo "Start executes primary ruleset."
+	echo "Stop disables all filtering"
+	echo "restart clears then enables"
+    ;;
+esac
